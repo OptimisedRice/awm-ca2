@@ -1,0 +1,397 @@
+<!-- templates/home.html -->
+{% extends "base.html" %}
+{% load leaflet_tags %}
+{% load static %}
+
+{% block title %}FoodieHub{% endblock %}
+{% block content %}
+<div class="container justify-content-md-center">
+    <div class="row justify-content-md-center">
+        <div class="col-md-11 col-md-offset-3">
+            <nav class="navbar navbar-expand-md navbar-light bg-light mb-3 border border-2 rounded-3">
+                <div class="container-fluid">
+                    <a class="navbar-brand" href="#">
+                        <img src="{% static 'images/logo.png' %}" alt="" width="40" height="40" class="d-inline-block align-text-top">
+                        FoodieHub
+                    </a>
+                    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+                        <span class="navbar-toggler-icon"></span>
+                    </button>
+                    <div class="collapse navbar-collapse" id="navbarSupportedContent">
+                        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                            <li class="nav-item">
+                                <a class="nav-link active" aria-current="page" href="{% url 'home' %}">Home</a>
+                            </li>
+                            <li class="nav-item">
+                                {% if user.is_authenticated %}
+                                    <a class="nav-link" href="{% url 'logout' %}">Logout</a>
+                                {% else %}
+                                    <a class="nav-link" href="{% url 'login' %}">Login</a>
+                                {% endif %}
+                            </li>
+                              <li class="nav-item">
+                                   <a class="nav-link" href="#">Hi {{ user.username }}!</a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </nav>
+
+            {% if user.is_authenticated %}
+            <style>
+                .leaflet-container {  /* all maps */
+                    height: 50vh;
+                }
+                .leaflet-control-container .leaflet-routing-container-hide {
+                 display: none;
+                }
+            </style>
+
+            <div class="container">
+                <div class="row">
+                    <div class="col-sm">
+                        <ul class="nav m-3 nav-pills">
+                          <li class="nav-item">
+                            <a id="all_pill" class="nav-link active" aria-current="page" data-bs-toggle="pill" href="#">All</a>
+                          </li>
+                          <li class="nav-item">
+                            <a id="res_pill" class="nav-link" href="#" data-bs-toggle="pill">Restaurants <img src = "{% static "images/utensils.svg" %}"/></a>
+                          </li>
+                          <li class="nav-item">
+                            <a id="cafe_pill" class="nav-link" href="#" data-bs-toggle="pill">Cafes <img src = "{% static "images/mug-saucer.svg" %}"/></a>
+                          </li>
+                          <li class="nav-item">
+                            <a id="pub_pill" class="nav-link" href="#" data-bs-toggle="pill">Pubs <img src = "{% static "images/beer-mug.svg" %}"/></a>
+                          </li>
+                        </ul>
+
+                        {% leaflet_map "leaflet-container" callback="window.map_init" %}
+
+                        <div id="amenity_info" class="alert alert-primary block mt-2" role="alert">
+                        </div>
+
+                        <form id="review_form">
+                            <legend>Leave a Review!</legend>
+                            <div class="mb-3">
+                                  <label for="ReviewInput" class="form-label">Description</label>
+                                  <input type="text" id="ReviewInput" class="form-control" placeholder="How was the place?">
+                            </div>
+                            <div class="mb-3">
+                                <label for="customRange3" class="form-label">Rating 0-5</label>
+                                <input type="range" class="form-range" id="formControlRange"
+                                       min="0" max="5" step="0.1" id="customRange3"
+                                onChange="document.getElementById('rangeval').innerText = document.getElementById('formControlRange').value">
+                                <span id="rangeval">2.5</span>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Submit</button>
+                        </form>
+                    </div>
+                    <div class="col-sm-4 mb-4">
+                        <h1>Reviews</h1>
+                        <ul id="review_list" class="list-group">
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="alert alert-primary block" role="alert">
+                You are not logged in. <a href="{% url 'login' %}" class="alert-link">Login Now</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+    window.onload= () => {
+        let allPill = document.getElementById("all_pill")
+        allPill.addEventListener("click", sortAmenities)
+
+        let resPill = document.getElementById("res_pill")
+        resPill.addEventListener("click", sortAmenities)
+
+        let cafePill = document.getElementById("cafe_pill")
+        cafePill.addEventListener("click", sortAmenities)
+
+        let pubPill = document.getElementById("pub_pill")
+        pubPill.addEventListener("click", sortAmenities)
+
+        let reviewForm = document.getElementById("review_form")
+        reviewForm.addEventListener("submit", submitReview)
+    }
+    let circle;
+    let marker;
+    function map_init (map, options) {
+        if (!navigator.geolocation) {
+            console.log("error")
+        } else {
+            navigator.geolocation.getCurrentPosition(success);
+            navigator.geolocation.watchPosition(updatePosition);
+        }
+
+        function updatePosition(position) {
+            let location = L.latLng(position.coords.latitude, position.coords.longitude);
+            if(!marker) map.flyTo(location, 13);
+
+            const latitude = position.coords.latitude;
+            const longitude = position.coords.longitude;
+            const accuracy = position.coords.accuracy;
+
+            if (marker) map.removeLayer(marker);
+            marker = L.marker([latitude.valueOf(), longitude.valueOf()]).addTo(map);
+            if (circle) map.removeLayer(circle);
+            circle = L.circle([latitude.valueOf(), longitude.valueOf()], {radius: accuracy/2}).addTo(map);
+            update_db(position);
+        }
+
+        function success(position) {
+            load_amenities(map, position);
+            updatePosition(position);
+        }
+    }
+
+    function update_db(position) {
+        let locString = position.coords.longitude + ", " + position.coords.latitude;
+            $.ajax({
+                type: "POST",
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                url: "/updatedb/",
+                data: {
+                    point: locString
+                }
+            }).done(function (data, status, xhr) {
+                //console.log(data["message"])
+            }).fail(function (xhr, status, error) {
+                //console.log(error);
+            }).always(function () {
+               // console.log("find_loc_ed finished");
+            });
+    }
+
+    let globalMap;
+    let globalRes;
+    let globalCafes;
+    let globalPubs;
+    function load_amenities(map, position) {
+        let wkt = new Wkt.Wkt();
+        let restaurants = L.markerClusterGroup();
+        let cafes = L.markerClusterGroup();
+        let pubs = L.markerClusterGroup();
+
+        let utensil = L.icon({
+            iconUrl: '{% static "images/utensils.svg" %}',
+            iconSize:     [20, 60], // size of the icon
+            popupAnchor:  [0, -10] // point from which the popup should open relative to the iconAnchor
+        });
+        let mug = L.icon({
+            iconUrl: '{% static "images/mug-saucer.svg" %}',
+            iconSize:     [20, 60], // size of the icon
+            popupAnchor:  [0, -10] // point from which the popup should open relative to the iconAnchor
+        });
+
+        let beer = L.icon({
+            iconUrl: '{% static "images/beer-mug.svg" %}',
+            iconSize:     [20, 60], // size of the icon
+            popupAnchor:  [0, -10] // point from which the popup should open relative to the iconAnchor
+        });
+        {% for amenity in amenities %}
+            wkt.read("{{ amenity.location }}".split(";")[1])
+
+            amenity_info = "<table><tbody>" +
+                "<tr><td>Name:</td><td>" +
+            "{{ amenity.name }}" +
+            "</td></tr>" +
+                "<tr><td>Type:</td><td>" +
+            "{{ amenity.type }}" +
+            "</td></tr>" +
+                ("{{ amenity.cuisine }}" ?
+            ("<tr><td>Cuisine:</td><td>" +
+            "{{ amenity.cuisine }}" +
+            "</td></tr>"): "") +
+                ("{{ amenity.address }}" ?
+                    ("<tr><td>Location:</td><td>" +
+            "{{ amenity.address }}" +
+            "</td></tr>"): "") +
+            "</tbody></table>"
+
+             switch("{{ amenity.type }}") {
+                case "restaurant":
+                    restaurants.addLayer(L.geoJSON(wkt.toJson(), {
+                        pointToLayer: function (feature, latlng) {
+                            let marker = L.marker(latlng, {icon: utensil})
+                            marker.amenity_id = {{ amenity.id }}
+                            marker.amenity_info = amenity_info
+                            return marker;
+                        },
+                        onEachFeature: function (feature, layer) {
+                            layer.addEventListener("click", (e) => routeToMarker(e, position))
+                        }
+                    }));
+                    break;
+                case "cafe":
+                    cafes.addLayer(L.geoJSON(wkt.toJson(), {
+                        pointToLayer: function (feature, latlng) {
+                            let marker = L.marker(latlng, {icon: mug})
+                            marker.amenity_id = {{ amenity.id }}
+                            marker.amenity_info = amenity_info
+                            return marker;
+                        },
+                        onEachFeature: function (feature, layer) {
+                            layer.addEventListener("click", (e) => routeToMarker(e, position))
+                        }
+                    }));
+                    break;
+                case "pub":
+                    pubs.addLayer(L.geoJSON(wkt.toJson(), {
+                        pointToLayer: function (feature, latlng) {
+                            let marker = L.marker(latlng, {icon: beer})
+                            marker.amenity_id = {{ amenity.id }}
+                            marker.amenity_info = amenity_info
+                            return marker;
+                        },
+                        onEachFeature: function (feature, layer) {
+                            layer.addEventListener("click", (e) => routeToMarker(e, position))
+                        }
+                    }));
+                    break;
+            }
+
+            if("{{ amenity.building }}" !== "None") {
+                wkt.read("{{ amenity.building }}".split(";")[1])
+
+                switch("{{ amenity.type }}") {
+                case "restaurant":
+                    restaurants.addLayer(L.geoJSON(wkt.toJson()));
+                    break;
+                case "cafe":
+                    cafes.addLayer(L.geoJSON(wkt.toJson()));
+                    break;
+                case "pub":
+                    pubs.addLayer(L.geoJSON(wkt.toJson()));
+                    break;
+            }
+            }
+        {% endfor %}
+        map.addLayer(restaurants);
+        globalRes = restaurants;
+        map.addLayer(cafes);
+        globalCafes = cafes;
+        map.addLayer(pubs);
+        globalPubs = pubs;
+
+        globalMap = map;
+    }
+
+    function sortAmenities(e) {
+        globalMap.removeLayer(globalCafes);
+        globalMap.removeLayer(globalPubs);
+        globalMap.removeLayer(globalRes);
+        switch(e.target.id) {
+            case "all_pill":
+                globalMap.addLayer(globalCafes);
+                globalMap.addLayer(globalPubs);
+                globalMap.addLayer(globalRes);
+                break;
+            case "res_pill":
+                globalMap.addLayer(globalRes);
+                break;
+            case "cafe_pill":
+                globalMap.addLayer(globalCafes);
+                break;
+            case "pub_pill":
+                globalMap.addLayer(globalPubs);
+                break;
+        }
+    }
+
+    let control = null;
+    function routeToMarker(e, position) {
+        load_reviews(e.target.amenity_id);
+
+        $("#amenity_info").html(e.target.amenity_info);
+        if(control !== null) {
+            globalMap.removeControl(control)
+            control = null;
+        }
+        control = L.Routing.control({
+            plan: new L.Routing.Plan([
+                    L.latLng(position.coords.latitude, position.coords.longitude),
+                    L.latLng(e.target._latlng)
+                ], {
+                    createMarker: function (i, wp, nWps) {
+                        if (i === 1) {
+                            return L.marker(wp.latLng);//.bindPopup(closest_toilet.toilet_info)
+                        } else {
+                            return L.marker(wp.latLng);
+                        }
+                    },
+                    draggableWaypoints: false
+                }
+            ),
+            lineOptions: {
+                addWaypoints: false
+            }
+        }).addTo(globalMap);
+        control.hide();
+    }
+    let reviews_id = null;
+    function load_reviews(id) {
+        reviews_id = id;
+        $.ajax({
+            type: "POST",
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            url: "/reviews/",
+            data: {
+                id: id
+            }
+        }).done(function (data, status, xhr) {
+            console.log(data["reviews"])
+            let content = data["reviews"].map(review => {
+                return '<li class="list-group-item d-flex justify-content-between align-items-center">' +
+                    review.description +
+                    '<span class="badge bg-primary rounded-pill">' + review.rating + '</span>' +
+                    '</li>'
+            })
+            $("#review_list").html(
+                content.join("")
+            )
+        }).fail(function (xhr, status, error) {
+            console.log(error);
+            $("#review_list").html("")
+        }).always(function () {
+            console.log("find_loc_ed finished");
+        });
+    }
+
+    function submitReview(e) {
+        e.preventDefault();
+
+        $.ajax({
+            type: "POST",
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            url: "/submit/",
+            data: {
+                description: $("#ReviewInput").val(),
+                rating: $("#rangeval").text(),
+                store_id: reviews_id
+            }
+        }).done(function (data, status, xhr) {
+            load_reviews(reviews_id)
+            $("#ReviewInput").val("")
+            $("#rangeval").text("2.5")
+            $("#formControlRange").val("2.5")
+            //console.log(data["message"])
+        }).fail(function (xhr, status, error) {
+            //console.log(error);
+        }).always(function () {
+           // console.log("find_loc_ed finished");
+        });
+    }
+</script>
+{% endblock %}
